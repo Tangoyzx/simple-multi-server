@@ -1,0 +1,17 @@
+{
+  "name": "simple-multi-server",
+  "version": "0.1.0",
+  "description": "轻量、可扩展、支持多款游戏并可在公网访问的网页游戏 WebSocket 服务端",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "license": "MIT"
+}
