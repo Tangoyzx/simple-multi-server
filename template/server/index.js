@@ -1,19 +1,9 @@
 /**
- * tictactoe —— 带服务端状态与逻辑的示例游戏（井字棋，2 人）。
+ * 井字棋 —— 权威裁决示例：继承 GameServer 基类，服务端校验落子并判定胜负。
  *
- * 演示如何扩展一个“带逻辑”的游戏模块：
- *  - onCreate  初始化每房间独立状态 room.state
- *  - onJoin    分配座位（X/O）、两人到齐后开局
- *  - onLeave   处理中途退出（另一方判胜）
- *  - onMessage 校验落子、判定胜负、广播最新状态
- *
- * 状态结构（存在 room.state，房间之间互相隔离）：
- *  - board:  长度为 9 的数组，值为 null | 'X' | 'O'
- *  - seats:  [playerId, playerId]，seat 0 = 'X'，seat 1 = 'O'
- *  - turn:   当前轮到哪个 seat（0 或 1），null 表示不在进行中
- *  - winner: null | 'X' | 'O' | 'draw'
- *  - started: 是否已开局
+ * 纯转发游戏则完全不需要这个文件（删掉 server/ 并去掉 game.json 里的 server 字段即可）。
  */
+import { GameServer } from 'simple-multi-server';
 
 const LINES = [
   [0, 1, 2],
@@ -46,11 +36,7 @@ function publicState(room) {
     turnPlayerId: s.turn === null ? null : s.seats[s.turn],
     winner: s.winner,
     started: s.started,
-    seats: s.seats.map((playerId, seat) => ({
-      seat,
-      symbol: SYMBOL[seat],
-      playerId,
-    })),
+    seats: s.seats.map((playerId, seat) => ({ seat, symbol: SYMBOL[seat], playerId })),
   };
 }
 
@@ -58,28 +44,25 @@ function broadcastState(room) {
   room.broadcast({ op: 'message', from: 'server', ...publicState(room) });
 }
 
-function error(player, message) {
+function sendError(player, message) {
   player.send({ op: 'error', error: message });
 }
 
-export default {
-  name: 'tictactoe',
-  relay: false,
-  maxPlayers: 2,
-
+export default class TicTacToe extends GameServer {
   onCreate(room) {
-    room.state.board = Array(9).fill(null);
-    room.state.seats = [null, null];
-    room.state.turn = null;
-    room.state.winner = null;
-    room.state.started = false;
-  },
+    const s = room.state;
+    s.board = Array(9).fill(null);
+    s.seats = [null, null]; // seat 0 = X, seat 1 = O
+    s.turn = null;
+    s.winner = null;
+    s.started = false;
+  }
 
   onJoin(room, player) {
     const s = room.state;
     const seat = s.seats[0] === null ? 0 : s.seats[1] === null ? 1 : null;
     if (seat === null) {
-      error(player, 'room is full');
+      sendError(player, 'room is full');
       return;
     }
     s.seats[seat] = player.id;
@@ -91,7 +74,7 @@ export default {
       s.turn = 0;
     }
     broadcastState(room);
-  },
+  }
 
   onLeave(room, player) {
     const s = room.state;
@@ -108,7 +91,7 @@ export default {
       }
     }
     broadcastState(room);
-  },
+  }
 
   onMessage(room, player, message) {
     const s = room.state;
@@ -121,28 +104,16 @@ export default {
       return;
     }
 
-    if (message.type !== 'move') {
-      // 该游戏不处理的消息直接忽略（relay:false 表示不会自动转发）
-      return;
-    }
+    if (message.type !== 'move') return; // 不处理的消息直接忽略（不会自动转发）
 
     const seat = s.seats.indexOf(player.id);
-    if (seat === -1) return error(player, 'not seated');
-
-    if (!s.started || s.winner) {
-      return error(player, 'game is not active');
-    }
-    if (s.turn !== seat) {
-      return error(player, 'not your turn');
-    }
+    if (seat === -1) return sendError(player, 'not seated');
+    if (!s.started || s.winner) return sendError(player, 'game is not active');
+    if (s.turn !== seat) return sendError(player, 'not your turn');
 
     const i = message.index;
-    if (!Number.isInteger(i) || i < 0 || i > 8) {
-      return error(player, 'invalid index');
-    }
-    if (s.board[i] !== null) {
-      return error(player, 'cell is occupied');
-    }
+    if (!Number.isInteger(i) || i < 0 || i > 8) return sendError(player, 'invalid index');
+    if (s.board[i] !== null) return sendError(player, 'cell is occupied');
 
     s.board[i] = SYMBOL[seat];
 
@@ -157,5 +128,5 @@ export default {
       s.turn = 1 - seat;
     }
     broadcastState(room);
-  },
-};
+  }
+}

@@ -1,4 +1,4 @@
-import { logger } from '../config.js';
+import { logger } from './config.js';
 
 /**
  * 一个房间 = 一个游戏实例的一次对局。

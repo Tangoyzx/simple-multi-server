@@ -1,6 +1,5 @@
 /**
  * 集中式配置：全部从环境变量读取，带合理默认值。
- * 避免在业务代码里散落魔法值。
  */
 
 function intFromEnv(name, fallback) {
@@ -10,10 +9,13 @@ function intFromEnv(name, fallback) {
   return Number.isNaN(n) ? fallback : n;
 }
 
+/** 协议版本号：客户端/游戏据此做兼容判断，独立升级时互不牵连。 */
+export const PROTOCOL_VERSION = 1;
+
 export const config = {
   // 监听地址：公网可达必须为 0.0.0.0
   host: process.env.HOST || '0.0.0.0',
-  // 监听端口（本机 8080 已被占用，默认用 3000）
+  // 监听端口
   port: intFromEnv('PORT', 3000),
   // 可选共享密钥：设置后客户端 join 必须携带相同 token，防公网滥用
   token: process.env.TOKEN || null,

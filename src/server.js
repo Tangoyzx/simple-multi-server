@@ -1,28 +1,16 @@
 import http from 'node:http';
-import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, normalize, resolve, extname } from 'node:path';
+import { dirname, basename, resolve } from 'node:path';
 import os from 'node:os';
 import { WebSocketServer } from 'ws';
-import { config, logger } from '../config.js';
+import { config, logger } from './config.js';
 import { Hub } from './hub.js';
-import { GameRegistry } from './gameRegistry.js';
+import { loadGame } from './gameLoader.js';
+import { createHttpHandler } from './http.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const publicDir = resolve(__dirname, '..', 'public');
-
-const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.png': 'image/png',
-  '.ico': 'image/x-icon',
-};
-
-function contentType(p) {
-  return MIME[extname(p).toLowerCase()] || 'application/octet-stream';
-}
+// 框架自带的客户端基类目录（供 /__engine/* 托管）
+const engineClientDir = resolve(__dirname, '..', 'client');
 
 function lanAddresses() {
   const out = [];
@@ -48,49 +36,27 @@ async function publicIp() {
 }
 
 /**
- * 启动服务。options 可覆盖 config（HOST/PORT/TOKEN/LOG_LEVEL）。
- * 返回 Promise，resolve 出一个句柄 { server, wss, hub, registry, port, close }。
+ * 启动服务端。options 可覆盖 config，并需提供 gameDir（含 game.json 的游戏目录）。
+ * 返回句柄 { server, wss, hub, game, port, close }。
  */
-export function startServer(options = {}) {
+export async function startServer(options = {}) {
   const opts = { ...config, ...options };
-  const registry = new GameRegistry();
-  const hub = new Hub(registry);
+  if (!opts.gameDir) {
+    throw new Error('startServer 需要 gameDir（指向含 game.json 的游戏目录）');
+  }
 
-  const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url, 'http://localhost');
+  const game = await loadGame(opts.gameDir);
+  if (game.server && game.server.init) await game.server.init();
 
-    if (url.pathname === '/health') {
-      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-      res.end(
-        JSON.stringify({
-          ok: true,
-          uptime: Math.round(process.uptime()),
-          now: new Date().toISOString(),
-          games: registry.list(),
-          rooms: hub.roomCount(),
-        })
-      );
-      return;
-    }
+  const hub = new Hub(game);
 
-    // 静态文件：仅允许 public 目录内，防路径穿越
-    const rel = url.pathname === '/' ? 'index.html' : url.pathname.replace(/^\/+/, '');
-    const filePath = normalize(join(publicDir, rel));
-    if (!filePath.startsWith(publicDir)) {
-      res.writeHead(403, { 'content-type': 'text/plain' });
-      res.end('forbidden');
-      return;
-    }
+  // 游戏客户端静态根目录 = entry 所在目录；入口文件名 = entry 的 basename
+  const entryPath = game.manifest.entry.replace(/\\/g, '/');
+  const clientRoot = resolve(game.dir, dirname(entryPath));
+  const entryFile = basename(entryPath);
 
-    try {
-      const data = await readFile(filePath);
-      res.writeHead(200, { 'content-type': contentType(filePath) });
-      res.end(data);
-    } catch {
-      res.writeHead(404, { 'content-type': 'text/plain' });
-      res.end('not found');
-    }
-  });
+  const handler = createHttpHandler({ game, clientRoot, entryFile, engineClientDir, hub });
+  const server = http.createServer(handler);
 
   const wss = new WebSocketServer({ server, path: opts.wsPath });
   wss.on('connection', (ws, req) => {
@@ -101,9 +67,10 @@ export function startServer(options = {}) {
   return new Promise((resolveStart) => {
     server.listen(opts.port, opts.host, async () => {
       const port = server.address().port;
-      logger.info(`SimpleMultiServer 已启动: http://${opts.host}:${port}`);
+      logger.info(`simple-multi-server 已启动: http://${opts.host}:${port}`);
+      logger.info(`  - 游戏: ${game.name}${game.server ? '（权威裁决）' : '（纯转发）'}`);
       logger.info(`  - WebSocket 路径: ${opts.wsPath}`);
-      logger.info(`  - 本地测试页面: http://127.0.0.1:${port}/`);
+      logger.info(`  - 本地访问: http://127.0.0.1:${port}/`);
       logger.info(`  - 健康检查: http://127.0.0.1:${port}/health`);
       for (const ip of lanAddresses()) {
         logger.info(`  - 内网访问: http://${ip}:${port}/`);
@@ -119,21 +86,24 @@ export function startServer(options = {}) {
         server,
         wss,
         hub,
-        registry,
+        game,
         port,
         close: () =>
           new Promise((resolveClose) => {
-            // 强制断开所有连接，避免残留连接卡住 server.close()
             for (const ws of wss.clients) ws.terminate();
             wss.close();
-            server.close(() => resolveClose());
+            server.close(async () => {
+              if (game.server && game.server.destroy) {
+                try {
+                  await game.server.destroy();
+                } catch (err) {
+                  logger.error('destroy 失败:', err);
+                }
+              }
+              resolveClose();
+            });
           }),
       });
     });
   });
-}
-
-// 直接运行时启动（node src/server.js / npm start）
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  startServer();
 }

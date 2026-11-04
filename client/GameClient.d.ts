@@ -3,20 +3,6 @@ export interface Peer {
   name: string | null;
 }
 
-export interface JoinedMessage {
-  op: 'joined';
-  game: string;
-  room: string;
-  you: string;
-  peers: Peer[];
-}
-
-export interface MessageEnvelope {
-  op: string;
-  from?: string;
-  [key: string]: unknown;
-}
-
 export interface GameClientOptions {
   /** 注入 WebSocket 实现（Node 下传入 ws 包的 WebSocket）。 */
   WebSocketImpl?: typeof WebSocket;

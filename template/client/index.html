@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>井字棋</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: #14161c; color: #e6e8ee; margin: 0;
+      min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 16px; padding: 24px;
+    }
+    h1 { margin: 0; font-size: 24px; }
+    #status { font-size: 13px; color: #9aa1b0; min-height: 18px; }
+    #board { display: grid; grid-template-columns: repeat(3, 90px); gap: 10px; }
+    .cell {
+      width: 90px; height: 90px; font-size: 40px; font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+      background: #1d2028; border: 1px solid #2c313d; border-radius: 10px;
+      cursor: pointer; user-select: none;
+    }
+    .cell.disabled { cursor: not-allowed; opacity: .45; }
+    button {
+      font: inherit; background: #2b6cb0; color: #fff; border: none;
+      border-radius: 8px; padding: 10px 20px; cursor: pointer; font-weight: 600;
+    }
+    button:hover { background: #3182ce; }
+    #roomHint { font-size: 12px; color: #6b7280; }
+  </style>
+</head>
+<body>
+  <h1>井字棋</h1>
+  <div id="status">连接中…</div>
+  <div id="board"></div>
+  <button id="restart" style="display:none">重新开局</button>
+  <div id="roomHint">同一房间地址开两个标签页即可对战</div>
+
+  <script type="module">
+    import { GameClient } from '/__engine/GameClient.js';
+
+    const $ = (id) => document.getElementById(id);
+    // 房间号从 ?room=xxx 读取，默认 default；同房间的客户端互相对战
+    const room = new URLSearchParams(location.search).get('room') || 'default';
+
+    const client = new GameClient(`ws://${location.host}/ws`);
+    let myId = null;
+    let state = null;
+
+    function render() {
+      const s = state;
+      $('status').textContent = s ? '' : '';
+      if (!s) { $('board').innerHTML = ''; return; }
+      if (s.winner === 'draw') $('status').textContent = '平局！';
+      else if (s.winner) $('status').textContent = `获胜方：${s.winner}`;
+      else if (!s.started) $('status').textContent = '等待另一位玩家加入…';
+      else {
+        const mySeat = (s.seats || []).find((x) => x.playerId === myId);
+        const sym = mySeat ? mySeat.symbol : '?';
+        $('status').textContent = `你是 ${sym}，${s.turnPlayerId === myId ? '轮到你了' : '等待对方落子'}`;
+      }
+      $('restart').style.display = s && s.started ? 'block' : 'none';
+
+      const board = $('board');
+      board.innerHTML = '';
+      (s.board || Array(9).fill(null)).forEach((v, i) => {
+        const d = document.createElement('div');
+        const playable = s && s.started && !s.winner && s.turnPlayerId === myId && v === null;
+        d.className = 'cell' + (playable ? '' : ' disabled');
+        d.textContent = v || '';
+        d.onclick = () => { if (playable) client.send({ type: 'move', index: i }); };
+        board.appendChild(d);
+      });
+    }
+
+    client.on('joined', (m) => { myId = m.you; });
+    client.on('message', (m) => { if (m.from === 'server' && m.type === 'state') { state = m; render(); } });
+    client.on('error', (m) => console.warn('server error:', m.error));
+    client.on('close', () => { $('status').textContent = '连接已断开'; });
+
+    $('restart').onclick = () => client.send({ type: 'restart' });
+
+    await client.connect();
+    client.join({ game: 'tictactoe', room });
+  </script>
+</body>
+</html>

@@ -1,13 +1,27 @@
 {
   "name": "simple-multi-server",
   "version": "0.1.0",
-  "description": "轻量、可扩展、支持多款游戏并可在公网访问的网页游戏 WebSocket 服务端",
+  "description": "轻量 WebSocket 网页游戏服务端框架：GameServer 基类 + 纯转发 + 客户端基类",
   "type": "module",
+  "bin": {
+    "simple-multi-server": "src/cli.js"
+  },
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src",
+    "client",
+    "template",
+    "README.md"
+  ],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "start": "node src/server.js",
+    "predemo": "node scripts/link-template.mjs",
+    "demo": "node src/cli.js template",
+    "pretest": "node scripts/link-template.mjs",
     "test": "node --test \"test/**/*.test.js\""
   },
   "dependencies": {

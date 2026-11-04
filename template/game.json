@@ -1,0 +1,7 @@
+{
+  "name": "tictactoe",
+  "title": "井字棋",
+  "entry": "client/index.html",
+  "server": "server/index.js",
+  "maxPlayers": 2
+}

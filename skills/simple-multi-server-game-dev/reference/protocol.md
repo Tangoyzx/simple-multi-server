@@ -7,7 +7,8 @@ WebSocket 上的 JSON 文本。所有消息为单个 JSON 对象。
 | 端点 | 说明 |
 | --- | --- |
 | `ws://<host>:3000/ws` | WebSocket 连接（路径可用环境变量覆盖，默认 `/ws`） |
-| `http://<host>:3000/health` | 健康检查（`{ok, uptime, games, rooms}`） |
+| `http://<host>:3000/health` | 健康检查（`{ok, game, protocolVersion, rooms}`） |
+| `http://<host>:3000/__engine/GameClient.js` | 框架客户端基类（游戏 HTML 引用它） |
 
 ## 保留字段
 
@@ -108,6 +109,8 @@ WebSocket 上的 JSON 文本。所有消息为单个 JSON 对象。
 
 服务端若设置环境变量 `TOKEN`，则所有 `join` 必须携带相同 `token`，否则 `error: invalid token`。
 
-## 版本与自省（规划中）
+## 协议版本
 
-当前版本尚未实现 `GET /meta` 与 `protocolVersion` 字段。计划为：`GET /meta` 返回协议版本、鉴权要求、全部消息 schema 与游戏列表，客户端优先据此接入。在实现前，以本文档为默认契约。
+- `GET /health` 返回 `protocolVersion`（当前 `1`）。
+- 游戏客户端/服务端可据此做兼容判断；协议不兼容时应明确报错，避免"莫名出错"。
+- 当前 `joined` 消息不含 `protocolVersion`；如需，以 `/health` 返回值为准。

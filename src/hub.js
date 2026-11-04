@@ -1,22 +1,24 @@
 import { Room } from './room.js';
 import { Player } from './player.js';
-import { config, logger } from '../config.js';
+import { config, logger } from './config.js';
 
 /** 服务端保留字段：不会被转发，客户端不可伪造。 */
 const RESERVED = new Set(['op', 'game', 'room', 'token', 'from']);
 
 /**
- * RelayHub —— 连接与房间的管理中枢。
+ * Hub —— 连接与房间的管理中枢。
  * 职责：
  *  - 把每条 WebSocket 连接包装成 Player
  *  - 处理 join / leave / send
  *  - 房间按 `${game}/${room}` 隔离，空房间自动销毁
- *  - 纯转发（relay）游戏：把 send 的多参数字段原样广播
- *  - 带逻辑游戏：把消息交给模块 onMessage 处理
+ *  - 已加载游戏的 game 名 → 交给其 GameServer 裁决；否则 → 纯转发（relay）
  */
 export class Hub {
-  constructor(registry) {
-    this.registry = registry;
+  /**
+   * @param {{ name:string, dir:string, manifest:object, server:object|null }} game
+   */
+  constructor(game) {
+    this.game = game;
     this.rooms = new Map(); // key -> Room
   }
 
@@ -64,6 +66,18 @@ export class Hub {
     }
   }
 
+  /** 返回该游戏名的裁决处理器（GameServer 实例）；null 表示纯转发。 */
+  resolveServer(gameName) {
+    return gameName === this.game.name ? this.game.server : null;
+  }
+
+  /** 返回该游戏名的房间人数上限；未加载/未知游戏不设限。 */
+  resolveMaxPlayers(gameName) {
+    if (gameName !== this.game.name) return null;
+    const m = this.game.manifest.maxPlayers;
+    return Number.isInteger(m) ? m : null;
+  }
+
   handleJoin(player, msg) {
     if (config.token && msg.token !== config.token) {
       return player.send({ op: 'error', error: 'invalid token' });
@@ -74,14 +88,15 @@ export class Hub {
     }
 
     const gameName = typeof msg.game === 'string' && msg.game ? msg.game : 'relay';
-    const module = this.registry.resolve(gameName);
+    const server = this.resolveServer(gameName);
     const roomId = typeof msg.room === 'string' && msg.room ? msg.room : 'default';
     const key = `${gameName}/${roomId}`;
 
     // 容量校验（在加入前）
-    if (module.maxPlayers != null) {
+    const maxPlayers = this.resolveMaxPlayers(gameName);
+    if (maxPlayers != null) {
       const existing = this.rooms.get(key);
-      if (existing && existing.size() >= module.maxPlayers) {
+      if (existing && existing.size() >= maxPlayers) {
         return player.send({ op: 'error', error: 'room is full' });
       }
     }
@@ -90,7 +105,7 @@ export class Hub {
     if (!room) {
       room = new Room(gameName, roomId);
       this.rooms.set(key, room);
-      if (module.onCreate) module.onCreate(room);
+      if (server && server.onCreate) server.onCreate(room);
       logger.debug('room created', key);
     }
 
@@ -106,7 +121,7 @@ export class Hub {
     });
     room.broadcast({ op: 'peer_join', peer: player.toPublic() }, player.id);
 
-    if (module.onJoin) module.onJoin(room, player);
+    if (server && server.onJoin) server.onJoin(room, player);
   }
 
   handleSend(player, msg) {
@@ -125,11 +140,12 @@ export class Hub {
       if (!RESERVED.has(k)) message[k] = v;
     }
 
-    const module = this.registry.resolve(player.game);
-    if (module.relay) {
+    const server = this.resolveServer(player.game);
+    if (server && server.onMessage) {
+      server.onMessage(room, player, message);
+    } else {
+      // 纯转发：广播给房间内其他玩家，不回发给发送者
       room.broadcast({ op: 'message', from: player.id, ...message }, player.id);
-    } else if (module.onMessage) {
-      module.onMessage(room, player, message);
     }
   }
 
@@ -144,10 +160,10 @@ export class Hub {
     const game = player.game;
 
     if (room) {
-      const module = this.registry.resolve(game);
+      const server = this.resolveServer(game);
       room.removePlayer(player.id);
       player.attached = false;
-      if (module.onLeave) module.onLeave(room, player);
+      if (server && server.onLeave) server.onLeave(room, player);
       room.broadcast({ op: 'peer_leave', peer: player.toPublic() });
       if (room.isEmpty()) {
         this.rooms.delete(key);

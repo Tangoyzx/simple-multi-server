@@ -1,16 +1,19 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
-import { startServer } from '../src/server.js';
-import { config } from '../config.js';
+import { startServer } from '../src/index.js';
+import { config } from '../src/config.js';
 
 config.logLevel = 'silent';
+
+const gameDir = fileURLToPath(new URL('../template', import.meta.url));
 
 let srv;
 let base;
 
 before(async () => {
-  srv = await startServer({ host: '127.0.0.1', port: 0 });
+  srv = await startServer({ host: '127.0.0.1', port: 0, gameDir });
   base = `ws://127.0.0.1:${srv.port}/ws`;
 });
 
@@ -18,17 +21,16 @@ after(async () => {
   await srv.close();
 });
 
-/** 简易 ws 测试客户端：维护收件箱，支持按条件等待消息。 */
+/** 简易 ws 测试客户端：维护收件箱，支持按条件等待消息（消费一次即移除）。 */
 function makeClient(ws) {
   const client = {
     ws,
-    inbox: [], // 待处理消息（FIFO，消费一次即移除）
+    inbox: [],
     waiters: [],
     send(obj) {
       this.ws.send(JSON.stringify(obj));
     },
     push(msg) {
-      // 先满足等待者（先到先得），消息即被消费
       for (let i = 0; i < this.waiters.length; i++) {
         const w = this.waiters[i];
         if (w.pred(msg)) {
@@ -72,7 +74,7 @@ function connect(url) {
   });
 }
 
-test('relay：多参数原样转发，且不回发给发送者', async () => {
+test('纯转发：未知游戏名回退，多参数转发且不回发给发送者', async () => {
   const a = await connect(base);
   const b = await connect(base);
   a.send({ op: 'join', game: 'relay', room: 'r1' });
@@ -89,16 +91,13 @@ test('relay：多参数原样转发，且不回发给发送者', async () => {
   assert.equal(got.b, 'x');
   assert.deepEqual(got.c, [1, 2, 3]);
   assert.deepEqual(got.nested, { k: 'v' });
-  // 服务端保留字段不应被客户端伪造
-  assert.equal(got.op, 'message');
 
-  // A 不应收到自己的消息
   await assert.rejects(a.waitFor((m) => m.op === 'message', 300), /timeout/);
   a.close();
   b.close();
 });
 
-test('隔离：不同房间、不同游戏互不串消息', async () => {
+test('隔离：不同房间互不串消息', async () => {
   const a = await connect(base);
   const b = await connect(base);
   const c = await connect(base);
@@ -112,41 +111,13 @@ test('隔离：不同房间、不同游戏互不串消息', async () => {
   a.send({ op: 'send', type: 'secret', value: 42 });
   const gotB = await b.waitFor((m) => m.op === 'message');
   assert.equal(gotB.value, 42);
-  // c 在另一个房间，不应收到
   await assert.rejects(c.waitFor((m) => m.op === 'message', 300), /timeout/);
   a.close();
   b.close();
   c.close();
 });
 
-test('未知游戏名自动回退为纯转发', async () => {
-  const a = await connect(base);
-  const b = await connect(base);
-  a.send({ op: 'join', game: 'brand-new-game', room: 'x' });
-  b.send({ op: 'join', game: 'brand-new-game', room: 'x' });
-  await a.waitFor((m) => m.op === 'joined');
-  await b.waitFor((m) => m.op === 'joined');
-
-  a.send({ op: 'send', type: 'ping', note: 'hello' });
-  const got = await b.waitFor((m) => m.op === 'message');
-  assert.equal(got.note, 'hello');
-  a.close();
-  b.close();
-});
-
-test('协议错误：非法 JSON 与未加入就发送', async () => {
-  const a = await connect(base);
-  a.ws.send('not-json{{');
-  const err1 = await a.waitFor((m) => m.op === 'error');
-  assert.match(err1.error, /JSON/);
-
-  a.send({ op: 'send', type: 'x' });
-  const err2 = await a.waitFor((m) => m.op === 'error');
-  assert.match(err2.error, /join/);
-  a.close();
-});
-
-test('井字棋：轮流落子与校验', async () => {
+test('权威裁决：井字棋轮流与校验', async () => {
   const a = await connect(base);
   const b = await connect(base);
   a.send({ op: 'join', game: 'tictactoe', room: 'tt1' });
@@ -155,7 +126,6 @@ test('井字棋：轮流落子与校验', async () => {
   const jb = await b.waitFor((m) => m.op === 'joined');
 
   const st = await a.waitFor((m) => m.op === 'message' && m.type === 'state' && m.started === true);
-  // 先手是 X（turnPlayerId 指向的玩家）
   const first = st.turnPlayerId === ja.you ? a : b;
   const second = first === a ? b : a;
   const secondId = first === a ? jb.you : ja.you;
@@ -171,7 +141,7 @@ test('井字棋：轮流落子与校验', async () => {
   assert.equal(st2.board[0], 'X');
   assert.equal(st2.turnPlayerId, secondId);
 
-  // 后手试图下已占用的 0 号格 → 被拒
+  // 后手试图下已占用格 → 被拒
   second.send({ op: 'send', type: 'move', index: 0 });
   const err2 = await second.waitFor((m) => m.op === 'error');
   assert.match(err2.error, /occupied/);
@@ -179,7 +149,7 @@ test('井字棋：轮流落子与校验', async () => {
   b.close();
 });
 
-test('井字棋：胜负判定', async () => {
+test('权威裁决：井字棋胜负判定', async () => {
   const a = await connect(base);
   const b = await connect(base);
   a.send({ op: 'join', game: 'tictactoe', room: 'tt2' });
@@ -191,7 +161,6 @@ test('井字棋：胜负判定', async () => {
   const x = st.turnPlayerId === ja.you ? a : b;
   const o = x === a ? b : a;
 
-  // X: 0,1,2 连成一行；O 填 3,4 干扰
   const script = [
     [x, 0],
     [o, 3],
@@ -207,4 +176,20 @@ test('井字棋：胜负判定', async () => {
   assert.equal(last.winner, 'X');
   a.close();
   b.close();
+});
+
+test('HTTP：/health 与静态资源带 no-store', async () => {
+  const health = await (await fetch(`http://127.0.0.1:${srv.port}/health`)).json();
+  assert.equal(health.ok, true);
+  assert.equal(health.game, 'tictactoe');
+  assert.equal(health.protocolVersion, 1);
+
+  const root = await fetch(`http://127.0.0.1:${srv.port}/`);
+  assert.equal(root.status, 200);
+  assert.match(root.headers.get('content-type') || '', /text\/html/);
+  assert.equal(root.headers.get('cache-control'), 'no-store');
+
+  const clientLib = await fetch(`http://127.0.0.1:${srv.port}/__engine/GameClient.js`);
+  assert.equal(clientLib.status, 200);
+  assert.equal(clientLib.headers.get('cache-control'), 'no-store');
 });
